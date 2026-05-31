@@ -246,7 +246,7 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
         ]),
     )
     .await;
-    mount_sse_once_match(
+    let root_followup_mock = mount_sse_once_match(
         &server,
         |req: &Request| body_contains(req, SPAWN_CALL_ID),
         sse(vec![
@@ -280,7 +280,11 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
             break child_id;
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for spawn_agent to create a child thread");
+            bail!(
+                "timed out waiting for spawn_agent to create a child thread: root lock {:?}, spawn output {:?}",
+                test.codex.multi_agent_version(),
+                root_followup_mock.function_call_output_text(SPAWN_CALL_ID),
+            );
         }
         sleep(Duration::from_millis(10)).await;
     };
