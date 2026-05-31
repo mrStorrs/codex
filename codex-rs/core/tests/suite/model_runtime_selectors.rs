@@ -225,6 +225,7 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
         "message": CHILD_PROMPT,
         "task_name": "worker",
         "model": CHILD_MODEL,
+        "fork_turns": "none",
     }))?;
     mount_sse_once_match(
         &server,
