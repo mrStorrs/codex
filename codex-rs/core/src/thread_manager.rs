@@ -1222,9 +1222,13 @@ impl ThreadManagerState {
             Some(source_thread) => source_thread.multi_agent_version(),
             None => None,
         };
-        let multi_agent_version = live_multi_agent_version
-            .or(inherited_multi_agent_version)
-            .or_else(|| config.multi_agent_version_from_features())?;
+        let multi_agent_version = match live_multi_agent_version.or(inherited_multi_agent_version) {
+            Some(multi_agent_version) => multi_agent_version,
+            None => self
+                .multi_agent_version_from_model_info(config)
+                .await
+                .or_else(|| config.multi_agent_version_from_features())?,
+        };
         let Some(source_thread_id) = source_thread_id else {
             return Some(multi_agent_version);
         };
@@ -1251,6 +1255,22 @@ impl ThreadManagerState {
             }
             None => Some(multi_agent_version),
         }
+    }
+
+    async fn multi_agent_version_from_model_info(
+        &self,
+        config: &Config,
+    ) -> Option<MultiAgentVersion> {
+        let refresh_strategy = RefreshStrategy::OnlineIfUncached;
+        let _ = self.models_manager.list_models(refresh_strategy).await;
+        let model = self
+            .models_manager
+            .get_default_model(&config.model, refresh_strategy)
+            .await;
+        self.models_manager
+            .get_model_info(model.as_str(), &config.to_models_manager_config())
+            .await
+            .multi_agent_version
     }
 
     /// Spawn a new thread with optional history and register it with the manager.

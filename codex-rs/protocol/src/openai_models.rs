@@ -22,6 +22,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
+use crate::protocol::MultiAgentVersion;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 pub const SPEED_TIER_FAST: &str = "fast";
@@ -345,6 +346,8 @@ pub struct ModelInfo {
         deserialize_with = "deserialize_optional_model_selector"
     )]
     pub tool_mode: Option<ToolMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl ModelInfo {
@@ -640,6 +643,7 @@ mod tests {
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             tool_mode: None,
+            multi_agent_version: None,
         }
     }
 
