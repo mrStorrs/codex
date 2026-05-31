@@ -267,6 +267,13 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
             config.model = Some(ROOT_MODEL.to_string());
         });
     let test = builder.build(&server).await?;
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+        ),
+        (1, Some(MultiAgentVersion::V2))
+    );
     test.submit_turn(ROOT_PROMPT).await?;
     let deadline = Instant::now() + Duration::from_secs(2);
     let child_id = loop {
