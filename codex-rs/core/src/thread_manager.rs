@@ -1227,11 +1227,7 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> MultiAgentVersionResolution {
-        let persisted_multi_agent_version = initial_history.get_multi_agent_version();
-        eprintln!(
-            "multi-agent selector precedence: persisted={persisted_multi_agent_version:?}, inherited={inherited_multi_agent_version:?}"
-        );
-        if let Some(multi_agent_version) = persisted_multi_agent_version {
+        if let Some(multi_agent_version) = initial_history.get_multi_agent_version() {
             return MultiAgentVersionResolution {
                 multi_agent_version: Some(multi_agent_version),
                 model_catalog_refresh_attempted: false,
@@ -1251,7 +1247,6 @@ impl ThreadManagerState {
             Some(source_thread) => source_thread.multi_agent_version(),
             None => None,
         };
-        eprintln!("multi-agent selector precedence: live={live_multi_agent_version:?}");
         let (multi_agent_version, model_catalog_refresh_attempted) =
             match live_multi_agent_version.or(inherited_multi_agent_version) {
                 Some(multi_agent_version) => (Some(multi_agent_version), false),
@@ -1308,24 +1303,15 @@ impl ThreadManagerState {
         config: &Config,
     ) -> Option<MultiAgentVersion> {
         let refresh_strategy = RefreshStrategy::OnlineIfUncached;
-        let models = self.models_manager.list_models(refresh_strategy).await;
+        let _ = self.models_manager.list_models(refresh_strategy).await;
         let model = self
             .models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
-        let model_info = self
-            .models_manager
+        self.models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
-        eprintln!(
-            "multi-agent selector lookup: model={model}, model_count={}, auth_mode={:?}, version={:?}",
-            models.len(),
-            self.models_manager
-                .auth_manager()
-                .and_then(AuthManager::auth_mode),
-            model_info.multi_agent_version,
-        );
-        model_info.multi_agent_version
+            .await
+            .multi_agent_version
     }
 
     /// Spawn a new thread with optional history and register it with the manager.

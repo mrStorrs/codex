@@ -209,7 +209,7 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_mock_server().await;
+    let server = wiremock::MockServer::start().await;
     let mut root_model = remote_model(ROOT_MODEL);
     root_model.multi_agent_version = Some(MultiAgentVersion::V2);
     let mut child_model = remote_model(CHILD_MODEL);
