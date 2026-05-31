@@ -43,9 +43,12 @@
 //! `FooterProps` mapping.
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -54,6 +57,8 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+
+const STATUS_LINE_MAX_ROWS: usize = 3;
 
 /// The rendering inputs for the footer area under the composer.
 ///
@@ -253,10 +258,32 @@ pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     .len() as u16
 }
 
+pub(crate) fn status_footer_height_for_width(
+    width: u16,
+    line: &Line<'static>,
+    right_width: u16,
+) -> u16 {
+    status_footer_lines(width, line, right_width).len() as u16
+}
+
 /// Render a single precomputed footer line.
 pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
     Paragraph::new(prefix_lines(
         vec![line],
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+    ))
+    .render(area, buf);
+}
+
+pub(crate) fn render_status_footer_lines(
+    area: Rect,
+    buf: &mut Buffer,
+    line: &Line<'static>,
+    right_width: u16,
+) {
+    Paragraph::new(prefix_lines(
+        status_footer_lines(area.width, line, right_width),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
@@ -296,6 +323,30 @@ pub(crate) fn render_footer_from_props(
 pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
     let max_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16);
     left_width <= max_width
+}
+
+fn status_footer_lines(width: u16, line: &Line<'static>, right_width: u16) -> Vec<Line<'static>> {
+    let available_width = max_left_width_for_right(Rect::new(0, 0, width, 1), right_width)
+        .map(usize::from)
+        .unwrap_or_else(|| {
+            width
+                .saturating_sub(FOOTER_INDENT_COLS as u16)
+                .max(1)
+                .into()
+        });
+    let available_width = available_width.max(1);
+
+    let mut lines = word_wrap_lines([line.clone()], RtOptions::new(available_width));
+    if lines.len() > STATUS_LINE_MAX_ROWS {
+        lines.truncate(STATUS_LINE_MAX_ROWS);
+        if let Some(last) = lines.last_mut() {
+            let ellipsis_style = last.spans.last().map(|span| span.style).unwrap_or_default();
+            last.spans.push(Span::styled("…", ellipsis_style));
+            *last = truncate_line_with_ellipsis_if_overflow(last.clone(), available_width);
+        }
+    }
+
+    lines
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1259,8 +1310,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
-    use crate::test_backend::VT100Backend;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
@@ -1327,22 +1376,12 @@ mod tests {
                 } else {
                     collaboration_mode_indicator
                 };
-                let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let mut truncated_status_line = if status_line_active
-                    && matches!(
-                        props.mode,
-                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                    ) {
-                    passive_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
-                    })
-                } else {
-                    None
-                };
                 let mut left_width = if status_line_active {
-                    truncated_status_line
+                    let available_width =
+                        area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                    passive_status_line
                         .as_ref()
-                        .map(|line| line.width() as u16)
+                        .map(|line| line.width().min(available_width) as u16)
                         .unwrap_or(0)
                 } else {
                     footer_line_width(
@@ -1382,12 +1421,8 @@ mod tests {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(area, right_width)
                     && left_width > max_left
-                    && let Some(line) = passive_status_line.as_ref().map(|line| {
-                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
-                    })
                 {
-                    left_width = line.width() as u16;
-                    truncated_status_line = Some(line);
+                    left_width = max_left;
                 }
                 let can_show_left_and_context =
                     can_show_left_with_context(area, left_width, right_width);
@@ -1396,8 +1431,8 @@ mod tests {
                     FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
                 ) {
                     if status_line_active {
-                        if let Some(line) = truncated_status_line.clone() {
-                            render_footer_line(area, f.buffer_mut(), line);
+                        if let Some(line) = passive_status_line.as_ref() {
+                            render_status_footer_lines(area, f.buffer_mut(), line, right_width);
                         }
                         if can_show_left_and_context && let Some(line) = &right_line {
                             render_context_right(area, f.buffer_mut(), line);
@@ -1492,25 +1527,6 @@ mod tests {
             context_line,
         );
         assert_snapshot!(name, terminal.backend());
-    }
-
-    fn render_footer_with_mode_indicator_and_context(
-        width: u16,
-        props: &FooterProps,
-        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-        context_line: Line<'static>,
-    ) -> String {
-        let height = footer_height(props).max(1);
-        let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
-        draw_footer_frame(
-            &mut terminal,
-            height,
-            props,
-            collaboration_mode_indicator,
-            /*ide_context_active*/ false,
-            context_line,
-        );
-        terminal.backend().vt100().screen().contents()
     }
 
     fn snapshot_footer_with_indicators(
@@ -1942,42 +1958,43 @@ mod tests {
     }
 
     #[test]
-    fn footer_status_line_truncates_to_keep_mode_indicator() {
-        let props = FooterProps {
-            mode: FooterMode::ComposerEmpty,
-            esc_backtrack_hint: false,
-            use_shift_enter_hint: false,
-            is_task_running: false,
-            collaboration_modes_enabled: true,
-            is_wsl: false,
-            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            status_line_value: Some(Line::from(
-                "Status line content that is definitely too long to fit alongside the mode label"
-                    .to_string(),
-            )),
-            status_line_enabled: true,
-            key_hints: FooterKeyHints::default_bindings(),
-            active_agent_label: None,
-        };
+    fn status_footer_lines_wrap_to_preserve_right_indicator_space() {
+        let line = Line::from(
+            "gpt-5.5 default · /home/user/projects/codex-status-wrap · feature/status-line-wrap",
+        );
 
-        let screen = render_footer_with_mode_indicator_and_context(
+        let lines = status_footer_lines(
             /*width*/ 80,
-            &props,
-            Some(CollaborationModeIndicator::Plan),
-            context_window_line(Some(50), /*used_tokens*/ None),
+            &line,
+            "Plan mode (shift+tab to cycle)".len() as u16,
         );
-        let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.width() <= 47));
+    }
+
+    #[test]
+    fn status_footer_lines_cap_long_status_lines() {
+        let line = Line::from(
+            "model · /very/long/project/path/that/keeps/going · feature/branch · context 25% used · 5h 40% left · weekly 70% left · thread title",
+        );
+
+        let width = 42;
+        let right_width = 12;
+        let max_left_width =
+            max_left_width_for_right(Rect::new(0, 0, width, 1), right_width).expect("left width");
+        let lines = status_footer_lines(width, &line, right_width);
+
+        assert_eq!(lines.len(), STATUS_LINE_MAX_ROWS);
         assert!(
-            collapsed.contains("Plan mode"),
-            "mode indicator should remain visible"
+            lines
+                .iter()
+                .all(|line| line.width() <= max_left_width as usize)
         );
         assert!(
-            !collapsed.contains("shift+tab to cycle"),
-            "compact mode indicator should be used when space is tight"
-        );
-        assert!(
-            screen.contains('…'),
-            "status line should be truncated with ellipsis to keep mode indicator"
+            lines
+                .last()
+                .is_some_and(|line| line.spans.iter().any(|span| span.content.contains('…')))
         );
     }
 
