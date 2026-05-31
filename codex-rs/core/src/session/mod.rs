@@ -421,6 +421,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) model_catalog_refresh_attempted: bool,
     pub(crate) multi_agent_version: Option<MultiAgentVersion>,
 }
 
@@ -483,6 +484,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            model_catalog_refresh_attempted,
             multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -519,15 +521,12 @@ impl Codex {
 
         let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
-            codex_models_manager::manager::RefreshStrategy::Offline
+            RefreshStrategy::Offline
         } else {
-            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
+            RefreshStrategy::OnlineIfUncached
         };
-        if config.model.is_none()
-            || !matches!(
-                refresh_strategy,
-                codex_models_manager::manager::RefreshStrategy::Offline
-            )
+        if !model_catalog_refresh_attempted
+            && (config.model.is_none() || !matches!(refresh_strategy, RefreshStrategy::Offline))
         {
             let _ = models_manager.list_models(refresh_strategy).await;
         }

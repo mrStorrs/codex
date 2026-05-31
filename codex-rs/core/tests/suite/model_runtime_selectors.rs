@@ -1,4 +1,5 @@
 use anyhow::Result;
+use anyhow::bail;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -267,13 +268,22 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
         });
     let test = builder.build(&server).await?;
     test.submit_turn(ROOT_PROMPT).await?;
-    let child_id = test
-        .thread_manager
-        .list_thread_ids()
-        .await
-        .into_iter()
-        .find(|thread_id| *thread_id != test.session_configured.thread_id)
-        .expect("spawn_agent should create a child thread");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_id = loop {
+        if let Some(child_id) = test
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .find(|thread_id| *thread_id != test.session_configured.thread_id)
+        {
+            break child_id;
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for spawn_agent to create a child thread");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
     let child = test.thread_manager.get_thread(child_id).await?;
 
     assert_eq!(

@@ -194,6 +194,11 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
+struct MultiAgentVersionResolution {
+    multi_agent_version: Option<MultiAgentVersion>,
+    model_catalog_refresh_attempted: bool,
+}
+
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
@@ -1205,8 +1210,28 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> Option<MultiAgentVersion> {
+        self.resolve_multi_agent_version_with_model_refresh(
+            config,
+            initial_history,
+            forked_from_thread_id,
+            inherited_multi_agent_version,
+        )
+        .await
+        .multi_agent_version
+    }
+
+    async fn resolve_multi_agent_version_with_model_refresh(
+        &self,
+        config: &Config,
+        initial_history: &InitialHistory,
+        forked_from_thread_id: Option<ThreadId>,
+        inherited_multi_agent_version: Option<MultiAgentVersion>,
+    ) -> MultiAgentVersionResolution {
         if let Some(multi_agent_version) = initial_history.get_multi_agent_version() {
-            return Some(multi_agent_version);
+            return MultiAgentVersionResolution {
+                multi_agent_version: Some(multi_agent_version),
+                model_catalog_refresh_attempted: false,
+            };
         }
 
         let source_thread_id = match initial_history {
@@ -1222,15 +1247,27 @@ impl ThreadManagerState {
             Some(source_thread) => source_thread.multi_agent_version(),
             None => None,
         };
-        let multi_agent_version = match live_multi_agent_version.or(inherited_multi_agent_version) {
-            Some(multi_agent_version) => multi_agent_version,
-            None => self
-                .multi_agent_version_from_model_info(config)
-                .await
-                .or_else(|| config.multi_agent_version_from_features())?,
+        let (multi_agent_version, model_catalog_refresh_attempted) =
+            match live_multi_agent_version.or(inherited_multi_agent_version) {
+                Some(multi_agent_version) => (Some(multi_agent_version), false),
+                None => (
+                    self.multi_agent_version_from_model_info(config)
+                        .await
+                        .or_else(|| config.multi_agent_version_from_features()),
+                    true,
+                ),
+            };
+        let Some(multi_agent_version) = multi_agent_version else {
+            return MultiAgentVersionResolution {
+                multi_agent_version: None,
+                model_catalog_refresh_attempted,
+            };
         };
         let Some(source_thread_id) = source_thread_id else {
-            return Some(multi_agent_version);
+            return MultiAgentVersionResolution {
+                multi_agent_version: Some(multi_agent_version),
+                model_catalog_refresh_attempted,
+            };
         };
         let multi_agent_version = match self
             .thread_store
@@ -1249,11 +1286,15 @@ impl ThreadManagerState {
                 multi_agent_version
             }
         };
-        match source_thread {
+        let multi_agent_version = match source_thread {
             Some(source_thread) => {
-                Some(source_thread.set_multi_agent_version_if_unset(multi_agent_version))
+                source_thread.set_multi_agent_version_if_unset(multi_agent_version)
             }
-            None => Some(multi_agent_version),
+            None => multi_agent_version,
+        };
+        MultiAgentVersionResolution {
+            multi_agent_version: Some(multi_agent_version),
+            model_catalog_refresh_attempted,
         }
     }
 
@@ -1360,10 +1401,13 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let multi_agent_version = match inherited_multi_agent_version {
-            Some(multi_agent_version) => Some(multi_agent_version),
+        let multi_agent_version_resolution = match inherited_multi_agent_version {
+            Some(multi_agent_version) => MultiAgentVersionResolution {
+                multi_agent_version: Some(multi_agent_version),
+                model_catalog_refresh_attempted: false,
+            },
             None => {
-                self.resolve_multi_agent_version(
+                self.resolve_multi_agent_version_with_model_refresh(
                     &config,
                     &initial_history,
                     forked_from_thread_id,
@@ -1372,6 +1416,7 @@ impl ThreadManagerState {
                 .await
             }
         };
+        let multi_agent_version = multi_agent_version_resolution.multi_agent_version;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1401,6 +1446,8 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
+            model_catalog_refresh_attempted: multi_agent_version_resolution
+                .model_catalog_refresh_attempted,
             multi_agent_version,
         })
         .await?;
