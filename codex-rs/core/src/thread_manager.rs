@@ -1303,15 +1303,24 @@ impl ThreadManagerState {
         config: &Config,
     ) -> Option<MultiAgentVersion> {
         let refresh_strategy = RefreshStrategy::OnlineIfUncached;
-        let _ = self.models_manager.list_models(refresh_strategy).await;
+        let models = self.models_manager.list_models(refresh_strategy).await;
         let model = self
             .models_manager
             .get_default_model(&config.model, refresh_strategy)
             .await;
-        self.models_manager
+        let model_info = self
+            .models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await
-            .multi_agent_version
+            .await;
+        eprintln!(
+            "multi-agent selector lookup: model={model}, model_count={}, auth_mode={:?}, version={:?}",
+            models.len(),
+            self.models_manager
+                .auth_manager()
+                .and_then(AuthManager::auth_mode),
+            model_info.multi_agent_version,
+        );
+        model_info.multi_agent_version
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
