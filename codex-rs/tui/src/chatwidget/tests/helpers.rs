@@ -27,6 +27,13 @@ pub(super) fn test_project_path() -> PathBuf {
     PathBuf::from(test_path_display("/tmp/project"))
 }
 
+pub(super) fn cache_status_project_root(chat: &mut ChatWidget, root_name: Option<&str>) {
+    chat.status_line_project_root_name_cache = Some(CachedProjectRootName {
+        cwd: chat.config.cwd.to_path_buf(),
+        root_name: root_name.map(str::to_string),
+    });
+}
+
 pub(super) fn truncated_path_variants(path: &str) -> Vec<String> {
     let chars: Vec<char> = path.chars().collect();
     (1..chars.len())
@@ -208,7 +215,7 @@ pub(super) fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op
 pub(super) fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     loop {
         match op_rx.try_recv() {
-            Ok(Op::Interrupt) => return,
+            Ok(Op::Interrupt { .. }) => return,
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
